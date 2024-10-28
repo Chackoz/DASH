@@ -1,101 +1,227 @@
-import Image from "next/image";
+"use client";
+import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { createTask, database } from '../app/utils/firebaseConfig';
+import { getDatabase, ref, onValue, set, push, onDisconnect } from 'firebase/database';
+
+// Define types for the component state
+type TaskStatus = 'pending' | 'completed' | 'failed';
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+  const [code, setCode] = useState<string>('');
+  const [output, setOutput] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<'editor' | 'upload'>('editor');
+  const [isOnline, setIsOnline] = useState<boolean>(true); // Default to true
+  const [clientId, setClientId] = useState<string>('');
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  useEffect(() => {
+    const presenceRef = ref(database, 'presence');
+    const connectRef = ref(database, '.info/connected');
+
+    // Create a new presence document and use its key as the clientId
+    const newPresenceRef = push(presenceRef);
+    setClientId(newPresenceRef.key as string);
+
+    // Set the online presence data for this client
+    set(newPresenceRef, {
+      online: true,
+      lastSeen: new Date().toISOString(),
+    });
+
+    const unsubscribe = onValue(connectRef, (snapshot) => {
+      if (snapshot.val() === true) {
+        console.log("Connected to Firebase");
+
+        // Set up disconnect behavior to remove presence data when offline
+        onDisconnect(newPresenceRef).remove();
+
+        setIsOnline(true);
+      } else {
+        console.log("Disconnected from Firebase");
+        setIsOnline(false);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+      set(newPresenceRef, {
+        online: false,
+        lastSeen: new Date().toISOString(),
+      });
+    };
+  }, []);
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const text = await file.text();
+      setCode(text);
+    }
+  };
+
+  const handleRunLocally = async () => {
+    setIsLoading(true);
+    setOutput('Running code...\n');
+    
+    try {
+      // Call Tauri command to run Python code
+      const result = await invoke<string>('run_python_code', { code });
+      setOutput(result);
+    } catch (error) {
+      setOutput(`Error: ${(error as Error).toString()}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSendToDash = async () => {
+    if (!code || !isOnline || !clientId) {
+      setOutput('Error: Cannot send to DASH. Please check your connection and code.');
+      return;
+    }
+
+    setIsLoading(true);
+    setOutput('Sending to DASH...\n');
+    
+    try {
+      // Create a new task in Firebase
+      const taskId = await createTask(clientId, code);
+      
+      setOutput(`Function deployed to DASH successfully!\nTask ID: ${taskId}\nStatus: Pending`);
+      
+      // Optional: Set up a listener for this specific task
+      const taskRef = ref(database, `tasks/${taskId}`);
+      onValue(taskRef, (snapshot) => {
+        const task = snapshot.val() as { status: TaskStatus; output?: string };
+        if (task && task.status !== 'pending') {
+          setOutput(`Task ${taskId}\nStatus: ${task.status}\n${task.output || ''}`);
+        }
+      });
+      
+    } catch (error) {
+      setOutput(`Error sending to DASH: ${(error as Error).message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex w-full bg-white min-h-screen">
+      {/* Sidebar */}
+      <div className="w-64 border-r border-gray-200 p-4 space-y-4">
+        <div className="flex items-center space-x-2 mb-8">
+          <div className="w-8 h-8 bg-blue-500 rounded-full" />
+          <span className="text-xl font-semibold">DASH Console</span>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        
+        {/* Connection Status */}
+        <div className={`flex items-center space-x-2 px-4 py-2 rounded-lg ${
+          isOnline ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+        }`}>
+          <div className={`w-2 h-2 rounded-full ${
+            isOnline ? 'bg-green-500' : 'bg-red-500'
+          }`} />
+          <span>{isOnline ? 'Online' : 'Offline'}</span>
+        </div>
+        
+        <nav className="space-y-2">
+          <button className="w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-100 rounded-lg flex items-center space-x-2">
+            <span>Functions</span>
+          </button>
+          <button className="w-full px-4 py-2 text-left text-gray-700 hover:bg-gray-100 rounded-lg flex items-center space-x-2">
+            <span>Deployments</span>
+          </button>
+        </nav>
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 p-6">
+        <div className="max-w-5xl mx-auto">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+            <div className="p-6">
+              <h2 className="text-2xl font-semibold mb-6">Function Editor</h2>
+
+              {/* Tabs */}
+              <div className="border-b border-gray-200 mb-6">
+                <div className="flex space-x-8">
+                  <button
+                    onClick={() => setActiveTab('editor')}
+                    className={`pb-4 ${
+                      activeTab === 'editor'
+                        ? 'border-b-2 border-blue-500 text-blue-600'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Code Editor
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('upload')}
+                    className={`pb-4 ${
+                      activeTab === 'upload'
+                        ? 'border-b-2 border-blue-500 text-blue-600'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Upload File
+                  </button>
+                </div>
+              </div>
+
+              {/* Editor */}
+              {activeTab === 'editor' ? (
+                <div className="mt-4">
+                  <textarea
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    className="w-full h-64 font-mono p-4 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none bg-gray-50"
+                    placeholder="# Type your Python code here...\n\nprint('Hello from DASH!')"
+                  />
+                </div>
+              ) : (
+                <div className="mt-4">
+                  <label className="block p-8 border-2 border-dashed rounded-lg text-center cursor-pointer hover:bg-gray-50">
+                    <span className="mt-2 block text-sm font-medium text-gray-600">
+                      Upload a Python file (.py)
+                    </span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept=".py"
+                      onChange={handleFileUpload}
+                    />
+                  </label>
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div className="mt-6 space-x-4">
+                <button
+                  onClick={handleRunLocally}
+                  disabled={isLoading || !code}
+                  className="inline-flex items-center px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Run Locally
+                </button>
+                
+                <button
+                  onClick={handleSendToDash}
+                  disabled={isLoading || !code || !isOnline}
+                  className="inline-flex items-center px-4 py-2 text-white bg-green-600 hover:bg-green-700 focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Send to DASH
+                </button>
+              </div>
+
+              {/* Output */}
+              <div className="mt-6">
+                <h3 className="text-lg font-medium mb-4">Output</h3>
+                <pre className="p-4 bg-gray-100 rounded-lg h-48 overflow-auto text-sm">{output}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
