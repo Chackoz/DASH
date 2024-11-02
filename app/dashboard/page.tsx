@@ -1,10 +1,9 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { createTask, database } from '@/app/utils/firebaseConfig';
-import { ref, onValue, set, push, onDisconnect, update } from 'firebase/database';
-import { Code2, Network, PlayCircle, Terminal, Upload } from 'lucide-react';
+import { ref, onValue, set, push, onDisconnect } from 'firebase/database';
+import { Terminal, Code2, Upload, Network, Activity, PlayCircle } from 'lucide-react';
 
 // Nord theme colors
 const nordColors = {
@@ -31,22 +30,20 @@ type NodeStatus = 'online' | 'busy' | 'idle' | 'offline';
 
 interface Task {
   id: string;
-  clientId?: string;
   code: string;
   status: TaskStatus;
   output?: string;
   createdAt: string;
   updatedAt: string;
-  workerId?: string;
 }
-let clientIdvalue = '';
+
 export default function Home() {
   const [code, setCode] = useState<string>('');
   const [output, setOutput] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'editor' | 'upload'>('editor');
   const [nodeStatus, setNodeStatus] = useState<NodeStatus>('idle');
-  const [clientId, setClientId] = useState<string>('dd');
+  const [clientId, setClientId] = useState<string>('');
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   const [networkNodes, setNetworkNodes] = useState<number>(0);
 
@@ -55,24 +52,13 @@ export default function Home() {
     const connectRef = ref(database, '.info/connected');
     const tasksRef = ref(database, 'tasks');
 
-    // Retrieve or create client ID from local storage
-    const existingClientId = localStorage.getItem('clientId');
-    const newClientId = existingClientId || push(presenceRef).key;
-
-    if (!existingClientId) {
-      localStorage.setItem('clientId', newClientId as string);
-      console.log("New Client ID Local:", newClientId as string);
-    }
-
-    if(newClientId as string){
-      setClientId(newClientId as string);
-      console.log("New Client ID:", newClientId as string);
-    }
-    clientIdvalue=newClientId as string
-    
+    // Initialize presence
+    const newPresenceRef = push(presenceRef);
+    const clientIdValue = newPresenceRef.key as string;
+    setClientId(clientIdValue);
 
     // Set initial presence
-    set(ref(database, `presence/${newClientId}`), {
+    set(newPresenceRef, {
       status: 'idle',
       lastSeen: new Date().toISOString(),
       type: 'worker',
@@ -82,7 +68,7 @@ export default function Home() {
     // Monitor connection status
     const unsubscribeConnect = onValue(connectRef, (snapshot) => {
       if (snapshot.val() === true) {
-        onDisconnect(ref(database, `presence/${newClientId}`)).remove();
+        onDisconnect(newPresenceRef).remove();
         setNodeStatus('idle');
       } else {
         setNodeStatus('offline');
@@ -95,22 +81,16 @@ export default function Home() {
       setNetworkNodes(nodes ? Object.keys(nodes).length : 0);
     });
 
-    // Monitor and execute pending tasks
-    const unsubscribeTasks = onValue(tasksRef, async (snapshot) => {
+    // Monitor recent tasks
+    const unsubscribeTasks = onValue(tasksRef, (snapshot) => {
       const tasks = snapshot.val();
       if (tasks) {
         const tasksList = Object.entries(tasks).map(([id, data]: [string, any]) => ({
           id,
           ...data,
         })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-          .slice(0, 5);
+        .slice(0, 5);
         setRecentTasks(tasksList);
-
-        // Check for a pending task and run it if the client is idle
-        const pendingTask = tasksList.find((task) => task.status === 'pending');
-        if (pendingTask && nodeStatus === 'idle') {
-          await handleRunTask(pendingTask);
-        }
       }
     });
 
@@ -119,42 +99,12 @@ export default function Home() {
       unsubscribeConnect();
       unsubscribePresence();
       unsubscribeTasks();
-      set(ref(database, `presence/${newClientId}`), {
+      set(newPresenceRef, {
         status: 'offline',
         lastSeen: new Date().toISOString()
       });
     };
   }, []);
-
-  const handleRunTask = async (task: Task) => {
-    // Check if the task was created by the same client; skip if so.
-    if (task.clientId === clientIdvalue) {
-      console.log("Skipping self-created task.");
-      return;
-    }
-    console.log("Running task:", task.id);
-    console.log("Task code:", task.code);
-    console.log("Task created by:", task.clientId);
-    console.log("Current client ID:", clientIdvalue);
-  
-    setIsLoading(true);
-    setNodeStatus('busy');
-  
-    const taskRef = ref(database, `tasks/${task.id}`);
-  
-    // Mark task as running and set the current client's ID as the worker ID
-    await update(taskRef, { status: 'running', workerId: clientId });
-  
-    try {
-      const result = await invoke<string>('run_python_code', { code: task.code });
-      await update(taskRef, { status: 'completed', output: result });
-    } catch (error) {
-      await update(taskRef, { status: 'failed', output: `Error: ${(error as Error).toString()}` });
-    } finally {
-      setIsLoading(false);
-      setNodeStatus('idle');
-    }
-  };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -210,11 +160,12 @@ export default function Home() {
   const getStatusColor = (status: NodeStatus) => {
     switch (status) {
       case 'online': return nordColors.aurora4;
-      case 'busy': return nordColors.aurora1;
+      case 'busy': return nordColors.aurora3;
       case 'idle': return nordColors.frost2;
       case 'offline': return nordColors.aurora1;
     }
   };
+
   return (
     <div className="flex w-full min-h-screen" style={{ backgroundColor: nordColors.polar1, color: nordColors.snow1 }}>
       {/* Sidebar */}

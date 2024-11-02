@@ -2,7 +2,7 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getDatabase, push, ref, set } from "firebase/database";
-
+import { getAuth } from 'firebase/auth';
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
   apiKey: "AIzaSyAkmPcECEHT4TN06hCxJMc51G4TYn6Hsbs",
@@ -27,9 +27,9 @@ async function createTask(clientId, code) {
     code,
     status: 'pending',
     output: null,
-    timestamp: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   });
   return newTaskRef.key;
 }
-
+export const auth = getAuth(app);
 export { createTask };
