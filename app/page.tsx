@@ -46,7 +46,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'editor' | 'upload'>('editor');
   const [nodeStatus, setNodeStatus] = useState<NodeStatus>('idle');
-  const [clientId, setClientId] = useState<string>('dd');
+  const [clientId, setClientId] = useState<string>('');
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   const [networkNodes, setNetworkNodes] = useState<number>(0);
 
@@ -143,7 +143,7 @@ export default function Home() {
     const taskRef = ref(database, `tasks/${task.id}`);
   
     // Mark task as running and set the current client's ID as the worker ID
-    await update(taskRef, { status: 'running', workerId: clientId });
+    await update(taskRef, { status: 'running', workerId: clientIdvalue });
   
     try {
       const result = await invoke<string>('run_python_code', { code: task.code });
